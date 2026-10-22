@@ -15,6 +15,7 @@ env:
 
 jobs:
 
+  # 1. Проверка инструментов (JDK + Maven) — «канарейка» пайплайна
   toolchain:
     runs-on: ubuntu-latest
     steps:
@@ -29,102 +30,198 @@ jobs:
           java -version
           mvn -version
 
+  # 2. Валидация POM (проверка модели Maven)
   validate:
     runs-on: ubuntu-latest
     needs: toolchain
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Validate POM
+        run: mvn -B validate
 
+  # 3. Компиляция
   compile:
     runs-on: ubuntu-latest
     needs: validate
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Compile
+        run: mvn -B compile
 
+  # 4. Юнит-тесты (Surefire, *Test.java)
   unit-test:
     runs-on: ubuntu-latest
     needs: compile
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Unit tests
+        run: mvn -B test
+      - name: Upload surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
 
+  # 5. Интеграционные тесты (Failsafe, *IT.java)
   integration-test:
     runs-on: ubuntu-latest
     needs: compile
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Integration tests
+        run: mvn -B verify -Dsurefire.skip=true
+      - name: Upload failsafe reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failsafe-reports
+          path: target/failsafe-reports/
 
+  # 6. Покрытие кода (JaCoCo)
   coverage:
     runs-on: ubuntu-latest
     needs: [unit-test, integration-test]
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Coverage (JaCoCo)
+        run: mvn -B verify
+      - name: Upload JaCoCo report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
 
+  # 7. Maven Enforcer (правила: версии, дубликаты, конфликты)
   enforcer:
     runs-on: ubuntu-latest
     needs: validate
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Enforce rules
+        run: mvn -B enforcer:enforce
 
+  # 8. SpotBugs (статический анализ байткода)
   spotbugs:
     runs-on: ubuntu-latest
     needs: compile
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: SpotBugs check
+        run: mvn -B compile spotbugs:check
 
+  # 9. SBOM (CycloneDX — спецификация состава ПО)
   sbom:
     runs-on: ubuntu-latest
     needs: validate
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Generate SBOM
+        run: mvn -B cyclonedx:makeAggregateBom
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: target/bom.json
 
+  # 10. Сканирование уязвимостей (Trivy по файловой системе)
   vulnerabilities:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - name: Trivy fs scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
 
+  # 11. Поиск секретов в коде (gitleaks)
   secrets:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+        with:
+          fetch-depth: 0
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # 12. Dependency Review — только на PR
   dependency-review:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/dependency-review-action@v4
 
+  # 13. Линт самих workflow-файлов
   actionlint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: raven-actions/actionlint@v2
 
+  # 14. Финальная упаковка jar (только если всё выше зелёное)
   package:
     runs-on: ubuntu-latest
+    if: |
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     needs: [toolchain, validate, compile, unit-test, integration-test, coverage, enforcer, spotbugs, sbom, vulnerabilities, secrets, dependency-review, actionlint]
     steps:
       - uses: actions/checkout@v4
-      - name: Test something
-        run: echo "This job tests something"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Build jar
+        run: mvn -B package -DskipTests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
